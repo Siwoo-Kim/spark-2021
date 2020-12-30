@@ -1,6 +1,11 @@
 import org.apache.spark.sql.types._
 
 object Schemas {
+    
+    val flightSchema = StructType(Array(
+        StructField("DEST_COUNTRY_NAME", StringType),
+        StructField("ORIGIN_COUNTRY_NAME", StringType),
+        StructField("count", LongType)))
 
     val retailSchema = StructType(Array(
         StructField("InvoiceNo", LongType),
