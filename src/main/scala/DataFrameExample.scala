@@ -1,8 +1,12 @@
-import org.apache.spark.sql.functions.{avg, count, countDistinct, lit, sum}
-import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql._
 import org.apache.spark.sql.types._
 
 object DataFrameExample {
+
+    def section(sec: String) = {
+        println(s"========================${sec}========================")
+    }
 
     def main(args: Array[String]): Unit = {
         val spark = SparkSession.builder()
@@ -10,7 +14,7 @@ object DataFrameExample {
                 .appName("dataframe")
                 .getOrCreate()
         spark.conf.set("spark.sql.shuffle.partitions", 5)
-        spark.sparkContext.setLogLevel("WARN")
+        spark.sparkContext.setLogLevel("ERROR")
         import spark.implicits._
         
         /**
@@ -37,6 +41,16 @@ object DataFrameExample {
         var df = spark.createDataFrame(rdd, manualSchema)
         df.show()
 
+        var retail = spark.read
+                .schema(Schemas.retailSchema)
+                .option("header", true)
+                .option("mode", "failfast")
+                .csv(s"${SparkData.PATH}/retail-data/by-day/*.csv")
+
+        retail.printSchema()
+        retail.createOrReplaceTempView("retail")
+        retail.show(5)
+        
         /**
          * query on dataframe
          */
@@ -53,12 +67,15 @@ object DataFrameExample {
          */
         var agg = flights.select(avg($"count"), countDistinct($"destination"))
         agg.show()
-
         
         /**
          * literal
+         * 
+         *  native vs spark type
+         *  lit -> native to spark type
          */
         flights.select($"*", lit(1).as("one")).show(2)
+        flights.select(lit(5), lit("five"), lit(5.0)).show(2)
 
         /**
          * adding & renaming column
@@ -80,7 +97,14 @@ object DataFrameExample {
 
         /**
          * filtering (and)
+         * 
+         * 1. and (모든 filter 절의 chain 은 and 연산)
+         * 2. or 
+         * 3. ===, =!= (columns), =, <> (exp), <, >
+         * 4. isin, contains
+         * 5. boolean column
          */
+        section("dataframe filtering")
         flights.where($"count" < 2)
                 .where($"origin" =!= "Croatia")
                 .show(2)
@@ -88,9 +112,122 @@ object DataFrameExample {
         flights.where(($"count"<2).or($"origin" =!= "Croatia"))
                 .show(2)
 
+        retail.where($"invoiceno" === 536365)
+                .select($"invoiceno", $"description")
+                .show(5, false)
+
+        var filters = $"unitprice" > 600
+        filters = filters.or($"description".contains("POSTAGE"))
+        retail.where($"stockcode".isin("DOT"))
+                .where(filters)
+                .show(5, false)
+        
+        var filter = $"stockcode".contains("DOT")
+        retail.withColumn("isExpensive", filter.and(filters))
+                .where($"isExpensive")
+                .show(5, false)
+        
+        retail.withColumn("isExpensive", not($"unitprice" <= 250))
+                .where($"isExpensive")
+                .select($"description", $"unitprice")
+                .show(5, false)
+
+        /**
+         * numbers
+         *  1. basic op (+,-,*,/)
+         *  2. pow
+         *  3. round(val, pos), bround(val, pos)
+         *      round up        round down
+         *  4. correlation coefficient (상관 관계, -1 ~ 0 ~ 1)
+         *  5. describe for numeric columns - count, mean, stddev, max, min
+         *  6. increasing id
+         */
+        section("dataframe numbers")
+        val fabricatedQuantity = pow($"quantity" * $"unitprice", 2) + 5
+        retail.select($"customerId", fabricatedQuantity.as("realQuantity")).show(2)
+        
+        df.select(
+            round(lit(2.4)),    //down
+            round(lit(2.5)),    //up
+            round(lit(2.6)),    //up
+            bround(lit(2.4)),   //down
+            bround(lit(2.5)),   //down
+            bround(lit(2.6)))   //up
+                .show(2)
+        
+        retail.select(corr($"quantity", $"unitprice")).show()
+        
+        retail.describe().show()
+        
+        retail.select(monotonically_increasing_id().as("id"), $"*")
+                .orderBy($"id".asc)
+                .show()
+
+        /**
+         * strings
+         * 
+         * 1. initcap, lower, upper
+         * 2. lpad, ltrim, rpad, rtrim, trim
+         * 3. regexp_extract, regexp_replace
+         * 4. translate (문자 단위로 해당 인덱스와 맞는 대체 문자 replace)
+         * 5. contains
+         */
+        //capitalize
+        section("dataframe strings")
+        retail.select(
+            initcap($"description"),
+            lower($"description"),
+            upper($"description")
+        ).show(5, false)
+
+        //pading
+        val hello = "HELLO"
+        val spaceHello = s"   ${hello}   "
+        df.select(
+            trim(lit(spaceHello)),
+            ltrim(lit(spaceHello)),
+            rtrim(lit(spaceHello)),
+            lpad(lit(hello), 3 + hello.length, "*"),
+            rpad(lit(hello), 3 + hello.length, "*"),
+            rpad(lpad(lit(hello), 3  + hello.length, "*"), 3 + 3 + hello.length, "*")
+        ).show()
+        
+        //regexp & search
+        val colors = Seq("black", "white", "red", "green", "blue")
+        var regexp = colors.map(_.toUpperCase).mkString("|")
+        retail.select(
+            $"description",
+            regexp_replace($"description", regexp, "COLOR").as("colorflag"))
+                .where(regexp_extract($"description", regexp, 0) =!= "")
+                .show()
+        
+        retail.select(
+            $"description",
+            translate(upper($"description"), "LEET", "1337").as("translate"))
+                .show()
+        
+        regexp = colors.map(_.toUpperCase).mkString("(", "|", ")")
+        retail.select(
+            $"description",
+            regexp_extract($"description", regexp, 1).as("extract")
+        ).show()
+        
+        retail.withColumn(
+            "hasColor", $"description".contains("BLACK").or($"description".contains("WHITE")))
+                .where($"hasColor")
+                .show()
+        
+        val filterSeq = colors.map(c => {
+            $"description".contains(c.toUpperCase).as(s"is_$c")
+        }) :+ $"*"
+        
+        retail.select(filterSeq:_*) //varargs
+                .where($"is_red")
+                .show()
         /**
          * distinct rows
          */
+        section("distinct")
         flights.select("origin", "destination").distinct().show(2)
 
         /**

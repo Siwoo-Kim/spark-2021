@@ -8,7 +8,7 @@ object Schemas {
         StructField("count", LongType)))
 
     val retailSchema = StructType(Array(
-        StructField("InvoiceNo", LongType),
+        StructField("InvoiceNo", StringType),
         StructField("StockCode", StringType),
         StructField("Description", StringType),
         StructField("Quantity", IntegerType),
