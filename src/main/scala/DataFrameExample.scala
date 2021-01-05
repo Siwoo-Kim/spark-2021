@@ -242,6 +242,9 @@ object DataFrameExample {
          * 4. timezone
          *  spark.sql.session.timeZone
          *      - session local timezone
+         *      
+         * 5. dateFormat for input source
+         *  read.option("dateFormat", "yyyy-MM-dd HH:mm:ss")
          */
         section("date & timestamp")
         spark.conf.set("spark.sql.session.timeZone", "GMT-5")
@@ -367,6 +370,37 @@ object DataFrameExample {
         
         retail.select(map($"description", $"invoiceno").as("map"))
                 .select(expr("map['WHITE METAL LANTERN']"), $"*")
+                .show(5)
+
+        /**
+         * json
+         * 
+         *  1. query
+         *      - get_json_object(jsonCol, path) (JSON 문자열에서 객체 축출)
+         *  2. serialize
+         *      - to_json   (struct to json)
+         *  3. deserialize
+         *      - from_json (json to struct)
+         *          deserialize 이 fail 할 경우 null 로 변
+         */
+        section("json")
+        val json = "{\n  \"key\": {\n    \"value\": [1, 2, 3]\n  }\n}"
+        val jsonDF = spark.range(1).select(lit(json).as("json"))
+        jsonDF.select(get_json_object($"json", "$.key.value").as("array"))
+                .show()
+        
+        retail.select(struct("invoiceno", "description").as("struct"))
+                .select(to_json($"struct"))
+                .show(5)
+        
+        val jsonSchema = StructType(Seq(
+            StructField("invoiceno", StringType, true),
+            StructField("description", StringType, true)
+        ))
+        
+        retail.select(struct("invoiceno", "description").as("struct"))
+                .select(to_json($"struct").as("json"))
+                .select(from_json($"json", jsonSchema))
                 .show(5)
         
         /**
