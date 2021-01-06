@@ -15,5 +15,7 @@ object Schemas {
         StructField("InvoiceDate", DateType),
         StructField("UnitPrice", DoubleType),
         StructField("CustomerID", DoubleType),
-        StructField("Country", StringType)))
+        StructField("Country", StringType),
+        StructField("_corrupt_record", StringType)
+    ))
 }
