@@ -14,7 +14,7 @@ import org.apache.spark.sql.functions._
  *      - 타입 안전하게 사용하고 싶을 때.
  *  
  *   Dataset 의 api 은 Dataframe 이 "모두 사용 가능"하다.
- *      Dataframe 은 Dataset 이므
+ *      Dataframe 은 Dataset
  */
 object DatasetExample {
 
