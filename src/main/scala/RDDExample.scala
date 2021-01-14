@@ -1,6 +1,7 @@
 import java.nio.file.Paths
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.rdd.RDD
+import scala.util.Random
 
 /**
  * RDD
@@ -34,12 +35,45 @@ import org.apache.spark.rdd.RDD
  *      중간 지점을 미래의 어느 시점에 처음이 아닌 그 시점 이후부터 사용할 수 있도록
  *      디스크에 저장 (결과물 혹은 인덱스).
  *  
- * operations on each partition
- *  
+ *  Key-Value RDD
+ *      - 키-값 형태을 가지는 rdd.
+ *      - 연산 메서드 <연산>ByKey
+ *      - "키의 중복 여부" 를 허용.
+ *      
+ *      1. rdd to PairRDD
+ *      2. transformation
+ *          2-1. mapValues, flatMapValues
+ *          2-2. rdd.keys, rdd.values, rdd.lookup(key)
+ *      3. aggregation
+ *          groupByKey
+ *              - 키를 기준으로 모든 값을 집계
+ *              - groupByKey 은 키를 기준으로 나누어진 파티션을 모두 메모리에 올림.
+ *              - skew 키에 의해 파티션이 되었다면 OutOfMemoryErrors 발생할 수 있음.
+ *              
+ *          reduceByKey
+ *              - groupByKey 와 달리 키를 기준으로 나누어진 파티션을 메모리에 올리지 않음.
+ *          
+ *          aggregate.
+ *              - aggregate(startValue)(reducerInPartition, reducerInNodes)
+ *              reducerInPartition - 파티션 내부의 집계 함수.
+ *              reducerInNodes - 모든 파티션의 집계 함수.
+ *      
+ *      4. join
+ *          join,
+ *          fullOuterJoin,
+ *          leftOuterJoin,
+ *          rightOuterJoin,
+ *          cartesian
+ *          
+ *      5. controlling partitions.
+ *          coalesce
+ *              - 같은 노드에 있는 복수의 파티션을 셔플. 
+ *                  (repartition 과 다르게 네트웍 트래픽이 발생하지 않음) 
+ *
  */
 object RDDExample {
     
-    def section(sec: String) = {
+    def section(sec: String = "") = {
         println(s"========================${sec}========================")
     }
     
@@ -179,5 +213,120 @@ object RDDExample {
             words.toList.map(w => (index, w)).iterator
         }
         wordRDD.repartition(3).mapPartitionsWithIndex(onPartitionByIndex).foreach(w => println(w))
+
+        /**
+         * rdd to key-value rdd
+         *  1. rdd.map(r => (key, value))
+         *  2. keyBy
+         */
+        section("PairRDD")
+        wordRDD.map(r => (r.length, r)).foreach(r => println(r))
+        wordRDD.map(r => (r.toLowerCase(), 1)).foreach(r => println(r))
+        wordRDD.keyBy(r => r.charAt(0).toLower).foreach(r => println(r))
+
+        /**
+         * mapping over values
+         *  
+         *  mapValues.
+         *      - map only for values
+         *      
+         *   flatMapValues
+         *      - map and flattening values 
+         */
+        section("mapValues")
+        val keywords = wordRDD.map(r => (r.charAt(0).toLower, r))
+        keywords.mapValues(values => values.toUpperCase()).foreach(pair => println(pair))
+        section("")
+        keywords.flatMapValues(word => word.toUpperCase).foreach(pair => println(pair))
+        
+        /**
+         * extracting keys and values
+         *  rdd.keys    => Key RDD
+         *  rdd.values  => Value RDD
+         *  rdd.lookup(key)
+         */
+        section("keys & values")
+        keywords.keys.foreach(k => println(k))
+        section()
+        keywords.values.foreach(v => println(v))
+        section()
+        val values = keywords.lookup('s')
+        for (v <- values)
+            println(v)
+
+        /**
+         * aggregations
+         *      
+         *      countByKey
+         *          - how many values for each key?
+         *      groupByKey
+         *          - collecting all the values for each key
+         *      reduceByKey
+         *          - reduce values for each key
+         *      aggregate(startValue)(reducerInPartition, reducerInPartitions) (for RDD)
+         *          - rdd 집계
+         *      aggregateByKey(startValue)(reducerInPartition, reducerInPartitions) (for Pair RDD)
+         *          - key 을 기준으로 집계 (group by aggregation)
+         *      combineByKey  
+         *          combinedByKey(
+         *              valCombiner,        // 초기 val.
+         *              mergeValuesCombiner,    // combiner + val
+         *              mergeCombinersCombiner, // combiner + combiner
+         *              partition)
+         */
+        val pairs = wordRDD.flatMap(w => w)
+                .map(w => (w, 1))
+        
+        section()
+        pairs.countByKey().foreach(p => println(p))
+        val nums = spark.sparkContext.parallelize(1 to 30, 5)
+        
+        section("groupByKey")
+        pairs.groupByKey()
+                .foreach(pair => println(pair))
+        
+        section()
+        pairs.groupByKey()
+                .map(pair => (pair._1, pair._2.sum))
+                .foreach(p => println(p))
+        
+        section("reduceByKey")
+        pairs.reduceByKey((left, right) => left + right).foreach(v => println(v))
+        
+        section("aggregate")
+        val sum = nums.aggregate(0)((left, right) => if (left<right) right else left, (left, right) => left + right)
+        println(sum)
+        
+        section("aggregateByKey")
+        nums.map(e => (if (e % 2 == 0) true else false, e))
+                .aggregateByKey(0)((left, right) => if (left<right) right else left, (left, right) => left + right)
+                .foreach(e => println(e))
+        pairs.aggregateByKey(0)((left, right) => left + right, (left, right) => if (left<right) right else left)
+                .foreach(e => println(e))
+
+        /**
+         * joins
+         *  leftRDD.join(rightRDD, numberOfPartitions)  
+         *  
+         *  inner join, outer join - 매칭되지 않은 키에 대한 처리.
+         *  left, right, outer - 두 집합 (왼쪽, 오른쪽) 중 어느쪽에 합칠지에 대한 처리.
+         *  cartesian - left * right
+         *  
+         */
+        section("joins")
+        val charMap = wordRDD.flatMap(w => w.toLowerCase())
+                .distinct()
+                .map(c => (c, new Random().nextDouble()))
+        val partitions = 10
+        pairs.join(charMap, partitions)
+                .foreach(p => println(p))
+
+        /**
+         * partitions
+         *  1. coalesce
+         *      collapses partitions on the same work. (no network traffic)
+         */
+        val numOfPartitions = wordRDD.coalesce(1).getNumPartitions
+        println(numOfPartitions)
     }
 }
